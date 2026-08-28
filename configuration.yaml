@@ -1,0 +1,24 @@
+template:
+  - trigger:
+      - platform: event
+        event_type: meter_receiver_reading_received
+    sensor:
+      - name: "Электросчётчик — энергия"
+        unique_id: meter_receiver_energy
+        state: "{{ trigger.event.data.energy_kwh }}"
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
+        attributes:
+          meter_id: "{{ trigger.event.data.meter_id }}"
+          source_name: "{{ trigger.event.data.name }}"
+
+      - name: "Электросчётчик — мощность"
+        unique_id: meter_receiver_power
+        state: "{{ trigger.event.data.power_w }}"
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        attributes:
+          meter_id: "{{ trigger.event.data.meter_id }}"
+          source_name: "{{ trigger.event.data.name }}"
