@@ -1,24 +1,56 @@
+# Пример конфигурации meter_receiver в /config/configuration.yaml Home Assistant.
+# Скопируйте блоки ниже в основной файл и адаптируйте под свои счётчики.
+
+meter_receiver:
+  forward_url: "http://192.168.1.50:5001/api/v1/readings"
+  forward_api_key: "replace-with-the-same-api-key-from-local-api-env"
+  meters:
+    # Источник — entity HA (показание берётся из состояния сенсора)
+    - entity_id: sensor.hvs_counter
+      account: "1234567890"
+      name: "ХВС"
+      meter_type: cold_water
+
+    # Источник — meter_id, присылаемый на endpoint /api/meter_receiver/readings
+    - meter_id: electricity_001
+      account: "1234567890"
+      name: "Электроснабжение"
+      meter_type: electricity
+      tariffs: [day, night]   # день/ночь; по умолчанию оба
+
+# Template-сенсоры, обновляемые событием meter_receiver_reading_received.
+# Если ключ template: уже есть в configuration.yaml — добавьте только элемент списка.
 template:
   - trigger:
       - platform: event
         event_type: meter_receiver_reading_received
     sensor:
-      - name: "Электросчётчик — энергия"
-        unique_id: meter_receiver_energy
-        state: "{{ trigger.event.data.energy_kwh }}"
+      - name: "Электросчётчик — день"
+        unique_id: meter_receiver_energy_day
+        state: "{{ trigger.event.data.values.day }}"
         unit_of_measurement: "kWh"
         device_class: energy
         state_class: total_increasing
         attributes:
           meter_id: "{{ trigger.event.data.meter_id }}"
-          source_name: "{{ trigger.event.data.name }}"
+          source_name: "{{ trigger.event.data.meter_name }}"
 
-      - name: "Электросчётчик — мощность"
-        unique_id: meter_receiver_power
-        state: "{{ trigger.event.data.power_w }}"
-        unit_of_measurement: "W"
-        device_class: power
-        state_class: measurement
+      - name: "Электросчётчик — ночь"
+        unique_id: meter_receiver_energy_night
+        state: "{{ trigger.event.data.values.night }}"
+        unit_of_measurement: "kWh"
+        device_class: energy
+        state_class: total_increasing
         attributes:
           meter_id: "{{ trigger.event.data.meter_id }}"
-          source_name: "{{ trigger.event.data.name }}"
+          source_name: "{{ trigger.event.data.meter_name }}"
+
+      - name: "Счётчик ХВС"
+        unique_id: meter_receiver_cold_water
+        state: "{{ trigger.event.data.values.value }}"
+        unit_of_measurement: "m³"
+        device_class: water
+        state_class: total_increasing
+        attributes:
+          meter_id: "{{ trigger.event.data.meter_id }}"
+          source_name: "{{ trigger.event.data.meter_name }}"

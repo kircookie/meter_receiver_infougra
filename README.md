@@ -1,442 +1,260 @@
 # Meter Receiver — Home Assistant + Local API
 
-Локальный тестовый проект для приёма показаний приборов учёта в Home Assistant и пересылки данных в отдельный HTTP API.
+Приём показаний приборов учёта в Home Assistant и пересылка данных в промежуточную базу данных (SQLite) через локальный HTTP API.
 
 ```text
-Postman / прибор / шлюз
-        │
-        │ POST JSON
+Прибор / шлюз / Postman                entity HA (сенсор)
+        │ POST JSON                          │ изменение состояния
+        ▼                                    ▼
+Home Assistant custom component «meter_receiver»
+        │  событие meter_receiver_reading_received → template sensors
+        │  POST JSON (forward)
         ▼
-Home Assistant custom component
-meter_receiver
-        │
-        ├─ отправляет событие Home Assistant
-        ├─ обновляет template sensors
-        │
-        └─ POST JSON
-                ▼
-Local Meter API
-        │
-        ├─ выводит запрос в консоль
-        └─ записывает данные в JSONL-файл
+Local Meter API (Flask)
+        ├─ авторизация по X-API-Key
+        ├─ только последнее показание на счётчик (+тариф)
+        ├─ дедупликация (значение не изменилось → не пишем)
+        ├─ флаг suspicious (показание меньше предыдущего)
+        └─ SQLite: readings.db
+        ▼
+GET /api/v1/readings — выборка потребителями (например, ЛК)
 ```
 
-Проект предназначен для разработки и тестов в доверенной локальной сети. Не публикуйте endpoint Home Assistant или локальный API в интернет без аутентификации, HTTPS и дополнительных мер защиты.
+Проект предназначен для работы в доверенной локальной сети. Не публикуйте endpoint Home Assistant или Local API в интернет без аутентификации, HTTPS и дополнительных мер защиты.
 
 ## Возможности
 
-- Приём JSON-показаний в Home Assistant через `POST /api/meter_receiver/readings`.
-- Проверка обязательного поля `meter_id` и приведение числовых значений.
-- Отправка события `meter_receiver_reading_received` в Home Assistant.
-- Обновление template-сенсоров энергии и мощности.
-- Пересылка показаний на внешний API, указанный в `forward_url`.
-- Локальный Flask API для тестирования.
-- Сохранение всех успешно принятых показаний в `received_readings.jsonl`.
-- Настройка API через переменные окружения из `.env`.
+- Два типа источников показаний на выбор:
+  - `entity_id` — существующий сенсор HA (значение берётся из состояния/атрибутов);
+  - `meter_id` — внешний отправитель шлёт JSON на `POST /api/meter_receiver/readings`.
+- Типы счётчиков: `cold_water` (ХВС, м³), `hot_water` (ГВС, м³), `electricity` (кВт·ч, тарифы день/ночь), `gas` (м³), `heat` (Гкал).
+- Пользовательское название счётчика («ХВС», «Электроснабжение») и лицевой счёт задаются в YAML-конфигурации.
+- Событие `meter_receiver_reading_received` в шине HA для template-сенсоров.
+- Пересылка показаний во внешний API (`forward_url`) с заголовком `X-API-Key`.
+- SQLite-хранилище: только последнее показание на пару счётчик+тариф, дедупликация, флаг `suspicious`.
+- Эндпоинт выборки `GET /api/v1/readings` (фильтры: `account`, `meter_id`, `meter_type`, `tariff`).
+- pytest-набор для Local API.
 
-## Структура репозитория (ДОРАБОТАТЬ КАК РЕПОЗИТОРИЙ В HOME ASSISTANT ДЛЯ ЗАГРУЗКИ ПОЛЬЗОВАТЕЛЯМИ)
+## Структура репозитория
 
 ```text
 .
 ├── custom_components/
-│   └── meter_receiver/
-│       ├── __init__.py
+│   └── meter_receiver/          # компонент для /config/custom_components/
+│       ├── __init__.py          # сетап, CONFIG_SCHEMA, отслеживание entity
 │       ├── const.py
-│       ├── http.py
+│       ├── meters.py            # MeterConfig + YAML-схема счётчиков
+│       ├── processing.py        # пайплайн: событие + forward
+│       ├── http.py              # endpoint /api/meter_receiver/readings
 │       └── manifest.json
 ├── local_api/
-│   ├── server.py
-│   ├── requirements.txt
-│   ├── .env.example
-│   └── .gitignore
-├── home_assistant/
-│   └── configuration.example.yaml
-├── .gitignore
+│   ├── server.py                # Flask-приложение (create_app)
+│   ├── storage.py               # SQLite: схема, store_reading, query_readings
+│   ├── schemas.py               # Pydantic-схема входящего показания
+│   ├── tests/test_api.py
+│   └── requirements.txt
+├── configuration.yaml           # пример конфигурации HA (методичка)
+├── .env.example                 # шаблон настроек Local API
 └── README.md
 ```
 
-При установке в Home Assistant содержимое `custom_components/meter_receiver/` копируется в:
-
-```text
-/config/custom_components/meter_receiver/
-```
-
-Файл `home_assistant/configuration.example.yaml` содержит фрагменты, которые нужно добавить в основной файл:
-
-```text
-/config/configuration.yaml
-```
-
-## Формат показаний
-
-Входной endpoint Home Assistant ожидает JSON:
-
-```json
-{
-  "meter_id": "electricity_001",
-  "name": "Квартира — электросчётчик",
-  "energy_kwh": 1284.73,
-  "power_w": 842
-}
-```
-
-| Поле | Тип | Обязательное | Описание |
-|---|---:|---:|---|
-| `meter_id` | string | Да | Стабильный идентификатор прибора учёта |
-| `name` | string | Нет | Отображаемое имя счётчика |
-| `energy_kwh` | number | Нет | Накопленное потребление электроэнергии, кВт·ч |
-| `power_w` | number | Нет | Текущая мощность, Вт |
-
-Для `energy_kwh` следует передавать именно накопительное значение счётчика. Такое значение подходит для сенсора Home Assistant с `device_class: energy` и `state_class: total_increasing`.
-
 ## Local Meter API
 
-Локальный API запускается на компьютере и принимает данные, которые custom component Home Assistant отправляет после получения показания.
-
-### Требования
-
-- Python 3.10 или выше.
-- Home Assistant и компьютер с API находятся в одной локальной сети.
-- Локальный TCP-порт API, по умолчанию `5001`, доступен из сети Home Assistant.
-
-Проверка версии Python:
-
-```bash
-python3 --version
-```
-
-### Установка зависимостей
-
-Перейдите в каталог API:
+### Установка и запуск
 
 ```bash
 cd local_api
-```
-
-Создайте и активируйте виртуальное окружение.
-
-**macOS / Linux (`zsh`, `bash`):**
-
-```bash
 python3 -m venv .venv
-source .venv/bin/activate
-```
-
-**Windows PowerShell:**
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-Установите зависимости из файла проекта:
-
-```bash
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-```
-
-### Настройка `.env`
-
-Создайте локальный файл конфигурации на основе шаблона:
-
-```bash
-cp .env.example .env
-```
-
-На Windows PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Откройте `.env` в редакторе и укажите нужные значения:
-
-```dotenv
-API_HOST=0.0.0.0
-API_PORT=5001
-DATA_FILE=received_readings.jsonl
-API_KEY=replace-with-a-long-random-secret
-```
-
-Описание переменных:
-
-| Переменная | Значение по умолчанию | Назначение |
-|---|---|---|
-| `API_HOST` | `0.0.0.0` | Адрес, на котором слушает API. `0.0.0.0` нужен для доступа Home Assistant по LAN |
-| `API_PORT` | `5001` | TCP-порт API |
-| `DATA_FILE` | `received_readings.jsonl` | Путь к файлу с принятыми данными; относительный путь отсчитывается от `local_api` |
-| `API_KEY` | Нет | Общий секрет для заголовка `X-API-Key` |
-
-`.env` содержит секрет и не должен попадать в Git. В репозиторий добавляется только `.env.example` без настоящего ключа.
-
-Сгенерировать случайный ключ на macOS/Linux:
-
-```bash
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-На Windows PowerShell:
-
-```powershell
-py -c "import secrets; print(secrets.token_urlsafe(32))"
-```
-
-### Запуск
-
-Из папки `local_api`, с активированным виртуальным окружением:
-
-```bash
+source .venv/bin/activate        # Windows: .venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+cp ../.env.example .env          # задать API_KEY
 python server.py
 ```
 
-Пример запуска:
+Переменные окружения (`.env`):
 
-```text
- * Serving Flask app 'server'
- * Running on all addresses (0.0.0.0)
- * Running on http://127.0.0.1:5001
- * Running on http://...:5001
-```
+| Переменная | По умолчанию | Назначение |
+|---|---|---|
+| `API_HOST` | `0.0.0.0` | Адрес прослушивания |
+| `API_PORT` | `5001` | TCP-порт |
+| `DB_PATH` | `readings.db` | Путь к файлу SQLite (создаётся автоматически) |
+| `API_KEY` | — | Секрет для заголовка `X-API-Key` (обязателен для записи/выборки) |
 
-Используйте адрес вида `http://...:5001` в настройке компонента Home Assistant. Не используйте `127.0.0.1` или `localhost`: для Home Assistant это адрес самого HA, а не вашего компьютера.
+Health check: `curl http://127.0.0.1:5001/health` → `{"status": "ok", "service": "local-meter-api"}`.
 
-Остановка API:
+### POST /api/v1/readings — приём показания
 
-```text
-Ctrl + C
-```
+Авторизация: заголовок `X-API-Key`.
 
-### Health check
-
-Пока API запущен, проверьте его с компьютера:
-
-```bash
-curl http://127.0.0.1:5001/health
-```
-
-Ожидаемый ответ:
+Вода / газ / отопление:
 
 ```json
 {
-  "service": "local-meter-api",
-  "status": "ok"
+  "account": "1234567890",
+  "meter_id": "hvs_001",
+  "meter_name": "ХВС",
+  "meter_type": "cold_water",
+  "unit": "м³",
+  "measured_at": "2026-10-12T10:00:00+00:00",
+  "source": "endpoint:hvs_001",
+  "value": 12.3
 }
 ```
 
-Проверьте также LAN-адрес компьютера:
+Электроснабжение (день/ночь):
 
-```bash
-curl http://...:5001/health
+```json
+{
+  "account": "1234567890",
+  "meter_id": "electricity_001",
+  "meter_name": "Электроснабжение",
+  "meter_type": "electricity",
+  "unit": "кВт·ч",
+  "measured_at": "2026-10-12T10:00:00+00:00",
+  "source": "entity:sensor.electricity_meter",
+  "day_kwh": 1284.73,
+  "night_kwh": 512.4
+}
 ```
 
-Если запрос к LAN-адресу не проходит, проверьте firewall и убедитесь, что используется фактический IP компьютера.
+Поля `unit`, `measured_at`, `source` необязательны; `unit` по умолчанию берётся из типа счётчика. Для электро допустимо передавать только один тариф. `value` запрещён для электро, `day_kwh`/`night_kwh` — для остальных типов.
+
+Ответ `201`:
+
+```json
+{
+  "status": "accepted",
+  "meter_id": "electricity_001",
+  "received_at": "2026-10-12T10:05:00.000000+00:00",
+  "stored": 2,
+  "results": [
+    {"tariff": "day", "value": 1284.73, "status": "ok", "result": "accepted"},
+    {"tariff": "night", "value": 512.4, "status": "ok", "result": "accepted"}
+  ]
+}
+```
+
+`status: "duplicate"` и `stored: 0` — показание не изменилось, запись не обновлялась. `status: "suspicious"` в `results` — значение меньше предыдущего (записано, но помечено).
+
+### GET /api/v1/readings — выборка
+
+Авторизация: заголовок `X-API-Key`. Возвращает последние показания с фильтрами:
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "http://127.0.0.1:5001/api/v1/readings?account=1234567890&meter_type=electricity"
+```
+
+```json
+{
+  "count": 2,
+  "results": [
+    {"account": "1234567890", "meter_id": "electricity_001", "meter_name": "Электроснабжение",
+     "meter_type": "electricity", "tariff": "day", "value": 1284.73, "unit": "кВт·ч",
+     "measured_at": "...", "received_at": "...", "source": "entity:sensor.electricity_meter",
+     "status": "ok", "raw_payload": "{...}"},
+    {"tariff": "night", ...}
+  ]
+}
+```
+
+### Формат хранения (SQLite)
+
+Таблица `readings`, уникальность — `(account, meter_id, tariff)`; хранится только последнее показание:
+
+| Колонка | Описание |
+|---|---|
+| `account` | Лицевой счёт |
+| `meter_id` | Идентификатор счётчика |
+| `meter_name` | Пользовательское название |
+| `meter_type` | `cold_water` / `hot_water` / `electricity` / `gas` / `heat` |
+| `tariff` | `NULL` или `day` / `night` (электро) |
+| `value` | Показание |
+| `unit` | `м³` / `кВт·ч` / `Гкал` |
+| `measured_at` | Время измерения (от прибора, если есть) |
+| `received_at` | Время приёма сервером (UTC) |
+| `source` | `entity:<entity_id>` / `endpoint:<meter_id>` |
+| `status` | `ok` / `suspicious` |
+| `raw_payload` | Исходный JSON |
+
+### Тесты
+
+```bash
+cd local_api
+.venv/bin/python -m pytest tests/ -q
+```
 
 ## Home Assistant component
 
 ### Установка
 
-Скопируйте каталог компонента в конфигурационную папку Home Assistant:
+Скопируйте каталог в конфигурационную папку HA:
 
 ```text
-custom_components/meter_receiver/
-```
-
-→
-
-```text
-/config/custom_components/meter_receiver/
-```
-
-После копирования в целевой папке должна быть структура:
-
-```text
-/config/custom_components/meter_receiver/
-├── __init__.py
-├── const.py
-├── http.py
-└── manifest.json
+custom_components/meter_receiver/  →  /config/custom_components/meter_receiver/
 ```
 
 ### Конфигурация
 
-Добавьте в `/config/configuration.yaml`:
+Пример полностью — в [`configuration.yaml`](configuration.yaml) репозитория. Кратко:
 
 ```yaml
 meter_receiver:
-  forward_url: "http://...:5001/api/v1/readings"
-  forward_api_key: "replace-with-the-same-api-key-from-local-api-env"
+  forward_url: "http://192.168.1.50:5001/api/v1/readings"
+  forward_api_key: "тот-же-ключ-что-в-.env"
+  meters:
+    - entity_id: sensor.hvs_counter        # источник: сенсор HA
+      account: "1234567890"                # лицевой счёт (задаётся вручную)
+      name: "ХВС"
+      meter_type: cold_water
+    - meter_id: electricity_001            # источник: endpoint
+      account: "1234567890"
+      name: "Электроснабжение"
+      meter_type: electricity
+      tariffs: [day, night]                # по умолчанию оба тарифа
 ```
 
-- Замените `...` на IPv4-адрес компьютера, где запущен Local Meter API.
-- `forward_api_key` должен совпадать с `API_KEY` в `local_api/.env`.
-- Если `forward_url` не задан, компонент примет показание и обновит сенсоры, но не будет выполнять пересылку.
+Правила:
 
-Добавьте template sensors. Если ключ `template:` уже присутствует в `configuration.yaml`, добавьте только элемент списка ниже, не дублируйте ключ `template:`.
+- У счётчика ровно один источник: `entity_id` **или** `meter_id`.
+- `tariffs` допустимы только для `electricity`; если не указаны — `[day, night]`.
+- Для entity-источника электросчётчика показания тарифов читаются из атрибутов сенсора: `day_kwh`/`t1` (день) и `night_kwh`/`t2` (ночь); для остальных типов — из состояния сенсора.
+- Если `forward_url` не задан — показание принимается, сенсоры обновляются, пересылка со статусом `skipped`.
 
-```yaml
-template:
-  - trigger:
-      - platform: event
-        event_type: meter_receiver_reading_received
-    sensor:
-      - name: "Электросчётчик — энергия"
-        unique_id: meter_receiver_energy
-        state: "{{ trigger.event.data.energy_kwh }}"
-        unit_of_measurement: "kWh"
-        device_class: energy
-        state_class: total_increasing
-        attributes:
-          meter_id: "{{ trigger.event.data.meter_id }}"
-          source_name: "{{ trigger.event.data.name }}"
+После изменения `configuration.yaml`: **Developer Tools → YAML → Check configuration → Restart**.
 
-      - name: "Электросчётчик — мощность"
-        unique_id: meter_receiver_power
-        state: "{{ trigger.event.data.power_w }}"
-        unit_of_measurement: "W"
-        device_class: power
-        state_class: measurement
-        attributes:
-          meter_id: "{{ trigger.event.data.meter_id }}"
-          source_name: "{{ trigger.event.data.name }}"
-```
+### Endpoint /api/meter_receiver/readings
 
-После изменения файлов:
-
-1. В Home Assistant откройте **Developer Tools → YAML**.
-2. Нажмите **Check configuration**.
-3. Если проверка успешна, выполните **Restart Home Assistant**.
-
-## Postman: полный тест
-
-Перед тестом убедитесь, что:
-
-- Local Meter API запущен на компьютере;
-- Home Assistant перезапущен после установки компонента;
-- `forward_url` и `forward_api_key` настроены;
-- Home Assistant и API видят друг друга в LAN.
-
-Создайте в Postman запрос:
-
-| Поле | Значение |
-|---|---|
-| Method | `POST` |
-| URL | `http://IP_HOME_ASSISTANT:PORT/api/meter_receiver/readings` |
-| Header | `Content-Type: application/json` |
-
-Пример URL для HA на стандартном порту:
-
-```text
-http://192.168.1.50:8123/api/meter_receiver/readings
-```
-
-Если пользовательский интерфейс HA открывается без `:8123`, используйте тот же адрес и порт, что в браузере.
-
-В Postman: **Body → raw → JSON**:
-
-```json
-{
-  "meter_id": "electricity_001",
-  "name": "Квартира — электросчётчик",
-  "energy_kwh": 1284.73,
-  "power_w": 842
-}
-```
-
-Успешный ответ от Home Assistant:
-
-```json
-{
-  "status": "ok",
-  "meter_id": "electricity_001",
-  "received": {
-    "meter_id": "electricity_001",
-    "name": "Квартира — электросчётчик",
-    "energy_kwh": 1284.73,
-    "power_w": 842
-  },
-  "forward": {
-    "status": "sent",
-    "http_status": 201,
-    "response": "{...}"
-  }
-}
-```
-
-## Проверка полученных данных
-
-Успешная доставка подтверждается в трёх местах.
-
-### Ответ Home Assistant в Postman
-
-Проверьте:
-
-```json
-"forward": {
-  "status": "sent",
-  "http_status": 201
-}
-```
-
-### Терминал Local Meter API
-
-В окне, где запущен `python server.py`, появятся JSON и access log:
-
-```text
-"POST /api/v1/readings HTTP/1.1" 201 -
-```
-
-### Файл истории
-
-Файл создаётся рядом с `server.py` либо в пути `DATA_FILE` из `.env`:
-
-```text
-local_api/received_readings.jsonl
-```
-
-Посмотреть последнюю запись:
+Без авторизации (рассчитан на доверенную LAN). Принимает только настроенные `meter_id`:
 
 ```bash
-tail -n 1 received_readings.jsonl
+curl -X POST http://IP_HA:8123/api/meter_receiver/readings \
+  -H "Content-Type: application/json" \
+  -d '{"meter_id": "electricity_001", "day_kwh": 1284.73, "night_kwh": 512.4}'
 ```
 
-Файл использует JSON Lines: одна строка соответствует одному принятому показанию.
+Для воды/газа: `{"meter_id": "hvs_001", "value": 12.3}`. Опционально `measured_at` (ISO-8601).
 
-### Сущности Home Assistant
-
-Откройте **Developer Tools → States** и найдите:
-
-```text
-Электросчётчик — энергия
-Электросчётчик — мощность
-```
-
-Entity IDs обычно похожи на:
-
-```text
-sensor.elektroschetchik_energiya
-sensor.elektroschetchik_moshchnost
-```
+Успешный ответ содержит `received` (нормализованное показание) и `forward` (`sent`/`failed`/`skipped`).
 
 ## Диагностика
 
-| Симптом | Возможная причина | Решение |
+| Симптом | Причина | Решение |
 |---|---|---|
-| `404 Not Found` при запросе в HA | Компонент не загрузился или endpoint не зарегистрирован | Проверьте путь `/config/custom_components/meter_receiver/`, блок `meter_receiver:` и перезапустите Home Assistant |
-| `400 Invalid JSON payload` от HA | Нет `meter_id`, ID пустой, либо числовые поля не приводятся к числу | Передайте непустой строковый `meter_id`; используйте корректные числовые значения |
-| `forward.status: skipped` | В YAML не указан `forward_url` | Добавьте `forward_url` и перезапустите HA |
-| `forward.status: failed` | API не доступен, URL неверный, firewall блокирует порт или API key не совпадает | Убедитесь, что API запущен, проверьте `/health`, IP/порт и ключ |
-| `401 Unauthorized` от local API | Неверный либо отсутствующий `X-API-Key` | Сверьте `API_KEY` в `.env` и `forward_api_key` в конфигурации HA |
-| `zsh: command not found: .venv\\Scripts\\Activate.ps1` | Использована Windows-команда в macOS/Linux | Используйте `source .venv/bin/activate` |
-| `ModuleNotFoundError: No module named 'flask'` | Flask не установлен в активном venv | Активируйте `.venv` и выполните `python -m pip install -r requirements.txt` |
-| `Address already in use` | Порт API уже занят | Остановите процесс на этом порту или измените `API_PORT` и `forward_url` |
-| Не создаётся `received_readings.jsonl` | Запрос не дошёл до API или API вернул ошибку | Проверьте ответ HA: ожидается `forward.status: sent` и `http_status: 201` |
+| `404` на `/api/meter_receiver/readings` | Компонент не загрузился | Проверьте `/config/custom_components/meter_receiver/`, блок `meter_receiver:` и перезапустите HA |
+| `400 Unknown meter_id` | Счётчик не описан в конфиге | Добавьте запись с `meter_id:` под `meters:` |
+| `400` про тарифы | Неверные поля для типа счётчика | Электро — `day_kwh`/`night_kwh`, остальные — `value` |
+| `401` от Local API | Неверный/пустой `X-API-Key` | Сверьте `API_KEY` в `.env` и `forward_api_key` в HA |
+| `500 API_KEY is not configured` | Ключ не задан в `.env` | Задайте `API_KEY` и перезапустите API |
+| `forward.status: failed` | API недоступен / firewall / неверный URL | Проверьте `/health` с хоста HA, IP/порт |
+| Показания не пишутся в БД | Дедупликация (`duplicate`) | Значение совпадает с текущим — это нормально |
+| Запись `status: suspicious` | Показание меньше предыдущего | Проверьте прибор/отправителя |
 
 ## Следующие шаги
 
-- Реализовать входную аутентификацию endpoint Home Assistant.
-- Хранить секреты Home Assistant не в YAML, а в `secrets.yaml` или Config Entry.
-- Добавить схему данных и валидацию полей через Pydantic.
-- Перейти с JSONL на SQLite/PostgreSQL/TimescaleDB.
-- Добавить очередь, retry и журналирование ошибок пересылки.
-- Перевести integration на Config Flow и создавать отдельные entity для каждого `meter_id`.
+- Входная аутентификация endpoint Home Assistant (токен в заголовке).
+- **Config Flow**: мастер добавления счётчиков в UI Home Assistant вместо YAML (выбор entity из выпадающего списка, создание отдельных entity на каждый счётчик).
+- Хранение секретов в `secrets.yaml` / Config Entry.
+- Очередь с retry и журналирование ошибок пересылки.
+- PostgreSQL/TimescaleDB вместо SQLite при росте числа счётчиков.
+- Push-модель доставки в ЛК (webhook) вместо поллинга `GET /api/v1/readings`.
