@@ -44,7 +44,7 @@ CONFIG_SCHEMA = vol.Schema(
 
 def _build_meter(entry: dict) -> MeterConfig:
     source_type = SOURCE_ENTITY if entry.get(CONF_ENTITY_ID) else SOURCE_ENDPOINT
-    source_id = entry[CONF_ENTITY_ID] or entry[CONF_METER_ID]
+    source_id = entry.get(CONF_ENTITY_ID) or entry[CONF_METER_ID]
     meter_type = entry[CONF_TYPE]
     return MeterConfig(
         source_type=source_type,

@@ -1,7 +1,7 @@
 {
   "domain": "meter_receiver",
   "name": "Meter Receiver Infougra",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "iot_class": "local_push",
   "documentation": "https://github.com/infougra/meter_receiver_infougra"
 }
