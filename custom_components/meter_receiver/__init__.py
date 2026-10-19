@@ -5,7 +5,7 @@ import logging
 import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.event import async_track_state_change
+from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
     CONF_ACCOUNT,
@@ -84,10 +84,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     hass.http.register_view(MeterReadingsView(hass))
 
     if meters_by_entity_id:
-        async_track_state_change(
+        async_track_state_change_event(
             hass,
             list(meters_by_entity_id),
-            _async_entity_changed,
+            _async_entity_changed_event(hass),
         )
 
     _LOGGER.info(
@@ -101,29 +101,39 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
-async def _async_entity_changed(hass, entity_id, old_state, new_state) -> None:
-    """Обработать новое состояние entity-источника показаний."""
-    if new_state is None or new_state.state in (None, "unknown", "unavailable"):
-        return
+def _async_entity_changed_event(hass):
+    """Фабрика обработчика изменений состояния entity-источников.
 
-    meter = hass.data[DOMAIN]["meters_by_entity_id"].get(entity_id)
-    if meter is None:
-        return
+    Колбэк получает Event; hass захватывается через замыкание —
+    совместимо с современными версиями Home Assistant.
+    """
 
-    try:
-        values = entity_values(meter, new_state)
-    except ValueError as err:
-        _LOGGER.warning("Skipping reading from %s: %s", entity_id, err)
-        return
+    async def _async_entity_changed(event) -> None:
+        entity_id = event.data["entity_id"]
+        new_state = event.data["new_state"]
+        if new_state is None or new_state.state in (None, "unknown", "unavailable"):
+            return
 
-    await async_process_reading(
-        hass,
-        meter,
-        values,
-        measured_at=new_state.last_changed,
-        raw={
-            "entity_id": entity_id,
-            "state": new_state.state,
-            "attributes": dict(new_state.attributes),
-        },
-    )
+        meter = hass.data[DOMAIN]["meters_by_entity_id"].get(entity_id)
+        if meter is None:
+            return
+
+        try:
+            values = entity_values(meter, new_state)
+        except ValueError as err:
+            _LOGGER.warning("Skipping reading from %s: %s", entity_id, err)
+            return
+
+        await async_process_reading(
+            hass,
+            meter,
+            values,
+            measured_at=new_state.last_changed,
+            raw={
+                "entity_id": entity_id,
+                "state": new_state.state,
+                "attributes": dict(new_state.attributes),
+            },
+        )
+
+    return _async_entity_changed
