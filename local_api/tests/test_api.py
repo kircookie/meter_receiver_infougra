@@ -7,19 +7,21 @@ API_KEY = "test-secret-key"
 
 WATER_PAYLOAD = {
     "account": "1234567890",
-    "meter_id": "hvs_001",
+    "code": "lk-code-1",
+    "meter_number": "126439",
     "meter_name": "ХВС",
     "meter_type": "cold_water",
-    "source": "endpoint:hvs_001",
+    "source": "entity:sensor.svd_15_126439_water",
     "value": 12.3,
 }
 
 ELECTRICITY_PAYLOAD = {
     "account": "1234567890",
-    "meter_id": "electricity_001",
+    "code": "lk-code-1",
+    "meter_number": "7701234567",
     "meter_name": "Электроснабжение",
     "meter_type": "electricity",
-    "source": "endpoint:electricity_001",
+    "source": "entity:sensor.electricity_meter",
     "day_kwh": 1284.73,
     "night_kwh": 512.4,
 }
@@ -78,8 +80,20 @@ def test_post_invalid_json(client):
     assert response.status_code == 400
 
 
-def test_post_missing_meter_id(client):
-    payload = {k: v for k, v in WATER_PAYLOAD.items() if k != "meter_id"}
+def test_post_missing_meter_number(client):
+    payload = {k: v for k, v in WATER_PAYLOAD.items() if k != "meter_number"}
+    response = client.post("/api/v1/readings", json=payload, headers=auth_headers())
+    assert response.status_code == 400
+
+
+def test_post_missing_code(client):
+    payload = {k: v for k, v in WATER_PAYLOAD.items() if k != "code"}
+    response = client.post("/api/v1/readings", json=payload, headers=auth_headers())
+    assert response.status_code == 400
+
+
+def test_post_empty_code(client):
+    payload = {**WATER_PAYLOAD, "code": ""}
     response = client.post("/api/v1/readings", json=payload, headers=auth_headers())
     assert response.status_code == 400
 
@@ -102,13 +116,14 @@ def test_store_water_reading(client):
     rows = db_rows(client)
     assert len(rows) == 1
     assert rows[0]["account"] == "1234567890"
-    assert rows[0]["meter_id"] == "hvs_001"
+    assert rows[0]["code"] == "lk-code-1"
+    assert rows[0]["meter_number"] == "126439"
     assert rows[0]["meter_type"] == "cold_water"
     assert rows[0]["tariff"] is None
     assert rows[0]["value"] == 12.3
     assert rows[0]["unit"] == "м³"
     assert rows[0]["status"] == "ok"
-    assert rows[0]["source"] == "endpoint:hvs_001"
+    assert rows[0]["source"] == "entity:sensor.svd_15_126439_water"
 
 
 def test_store_electricity_day_night(client):
@@ -204,10 +219,10 @@ def test_get_readings_filter_by_account_and_type(client):
     )
     body = response.get_json()
     assert body["count"] == 1
-    assert body["results"][0]["meter_id"] == "hvs_001"
+    assert body["results"][0]["meter_number"] == "126439"
 
     response = client.get(
-        "/api/v1/readings?meter_id=electricity_001&tariff=night",
+        "/api/v1/readings?meter_number=7701234567&tariff=night",
         headers=auth_headers(),
     )
     body = response.get_json()

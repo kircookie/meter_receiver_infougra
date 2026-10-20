@@ -8,7 +8,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     account TEXT NOT NULL,
-    meter_id TEXT NOT NULL,
+    code TEXT NOT NULL DEFAULT '',
+    meter_number TEXT NOT NULL,
     meter_name TEXT NOT NULL DEFAULT '',
     meter_type TEXT NOT NULL,
     tariff TEXT,
@@ -19,7 +20,7 @@ CREATE TABLE IF NOT EXISTS readings (
     source TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'ok',
     raw_payload TEXT NOT NULL DEFAULT '{}',
-    UNIQUE (account, meter_id, tariff)
+    UNIQUE (account, meter_number, tariff)
 );
 """
 
@@ -39,7 +40,8 @@ def store_reading(
     conn: sqlite3.Connection,
     *,
     account: str,
-    meter_id: str,
+    code: str,
+    meter_number: str,
     meter_name: str,
     meter_type: str,
     tariff: str | None,
@@ -60,8 +62,8 @@ def store_reading(
     """
     row = conn.execute(
         "SELECT id, value FROM readings "
-        "WHERE account = ? AND meter_id = ? AND tariff IS ?",
-        (account, meter_id, tariff),
+        "WHERE account = ? AND meter_number = ? AND tariff IS ?",
+        (account, meter_number, tariff),
     ).fetchone()
 
     if row is not None and row["value"] == value:
@@ -74,10 +76,11 @@ def store_reading(
 
     if row is not None:
         conn.execute(
-            "UPDATE readings SET meter_name = ?, meter_type = ?, value = ?, "
-            "unit = ?, measured_at = ?, received_at = ?, source = ?, "
+            "UPDATE readings SET code = ?, meter_name = ?, meter_type = ?, "
+            "value = ?, unit = ?, measured_at = ?, received_at = ?, source = ?, "
             "status = ?, raw_payload = ? WHERE id = ?",
             (
+                code,
                 meter_name,
                 meter_type,
                 value,
@@ -93,12 +96,13 @@ def store_reading(
     else:
         conn.execute(
             "INSERT INTO readings ("
-            "account, meter_id, meter_name, meter_type, tariff, value, unit, "
-            "measured_at, received_at, source, status, raw_payload"
-            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "account, code, meter_number, meter_name, meter_type, tariff, value, "
+            "unit, measured_at, received_at, source, status, raw_payload"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 account,
-                meter_id,
+                code,
+                meter_number,
                 meter_name,
                 meter_type,
                 tariff,
@@ -119,7 +123,7 @@ def query_readings(
     conn: sqlite3.Connection,
     *,
     account: str | None = None,
-    meter_id: str | None = None,
+    meter_number: str | None = None,
     meter_type: str | None = None,
     tariff: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -129,9 +133,9 @@ def query_readings(
     if account is not None:
         clauses.append("account = ?")
         params.append(account)
-    if meter_id is not None:
-        clauses.append("meter_id = ?")
-        params.append(meter_id)
+    if meter_number is not None:
+        clauses.append("meter_number = ?")
+        params.append(meter_number)
     if meter_type is not None:
         clauses.append("meter_type = ?")
         params.append(meter_type)
@@ -142,6 +146,6 @@ def query_readings(
     sql = "SELECT * FROM readings"
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY account, meter_id, tariff IS NOT NULL, tariff"
+    sql += " ORDER BY account, meter_number, tariff IS NOT NULL, tariff"
 
     return [dict(row) for row in conn.execute(sql, params).fetchall()]

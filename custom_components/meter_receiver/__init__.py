@@ -9,20 +9,18 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
     CONF_ACCOUNT,
+    CONF_CODE,
     CONF_ENTITY_ID,
     CONF_FORWARD_API_KEY,
     CONF_FORWARD_URL,
     CONF_METERS,
-    CONF_METER_ID,
+    CONF_METER_NUMBER,
     CONF_NAME,
     CONF_TARIFFS,
     CONF_TYPE,
     DEFAULT_UNITS,
     DOMAIN,
-    SOURCE_ENDPOINT,
-    SOURCE_ENTITY,
 )
-from .http import MeterReadingsView
 from .meters import METER_SCHEMA, MeterConfig
 from .processing import async_process_reading, entity_values
 
@@ -43,13 +41,12 @@ CONFIG_SCHEMA = vol.Schema(
 
 
 def _build_meter(entry: dict) -> MeterConfig:
-    source_type = SOURCE_ENTITY if entry.get(CONF_ENTITY_ID) else SOURCE_ENDPOINT
-    source_id = entry.get(CONF_ENTITY_ID) or entry[CONF_METER_ID]
     meter_type = entry[CONF_TYPE]
     return MeterConfig(
-        source_type=source_type,
-        source_id=source_id,
+        entity_id=entry[CONF_ENTITY_ID],
         account=entry[CONF_ACCOUNT],
+        code=entry[CONF_CODE],
+        meter_number=entry[CONF_METER_NUMBER],
         name=entry[CONF_NAME],
         meter_type=meter_type,
         tariffs=tuple(entry.get(CONF_TARIFFS) or ()),
@@ -69,32 +66,20 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
     meters = [_build_meter(entry) for entry in domain_config.get(CONF_METERS) or []]
     hass.data[DOMAIN]["meters"] = meters
-    hass.data[DOMAIN]["meters_by_meter_id"] = {
-        meter.source_id: meter
-        for meter in meters
-        if meter.source_type == SOURCE_ENDPOINT
+    hass.data[DOMAIN]["meters_by_entity_id"] = {
+        meter.entity_id: meter for meter in meters
     }
-    meters_by_entity_id = {
-        meter.source_id: meter
-        for meter in meters
-        if meter.source_type == SOURCE_ENTITY
-    }
-    hass.data[DOMAIN]["meters_by_entity_id"] = meters_by_entity_id
 
-    hass.http.register_view(MeterReadingsView(hass))
-
-    if meters_by_entity_id:
+    if meters:
         async_track_state_change_event(
             hass,
-            list(meters_by_entity_id),
+            [meter.entity_id for meter in meters],
             _async_entity_changed_event(hass),
         )
 
     _LOGGER.info(
-        "Meter Receiver set up: %d meters (%d entity, %d endpoint), forward_url=%s",
+        "Meter Receiver set up: %d meters (entity sources), forward_url=%s",
         len(meters),
-        len(meters_by_entity_id),
-        len(meters) - len(meters_by_entity_id),
         hass.data[DOMAIN][CONF_FORWARD_URL] or "not configured",
     )
 

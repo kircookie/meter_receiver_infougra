@@ -43,7 +43,7 @@ async def async_process_reading(
 
     record = {
         "account": meter.account,
-        "meter_id": meter.source_id,
+        "meter_number": meter.meter_number,
         "meter_name": meter.name,
         "meter_type": meter.meter_type,
         "unit": meter.unit,
@@ -53,7 +53,7 @@ async def async_process_reading(
         "values": values,
     }
 
-    hass.data[DOMAIN]["readings"][meter.source_id] = record
+    hass.data[DOMAIN]["readings"][meter.entity_id] = record
 
     hass.bus.async_fire(
         EVENT_READING_RECEIVED,
@@ -83,7 +83,8 @@ async def async_forward(
 
     payload: dict[str, Any] = {
         "account": meter.account,
-        "meter_id": meter.source_id,
+        "code": meter.code,
+        "meter_number": meter.meter_number,
         "meter_name": meter.name,
         "meter_type": meter.meter_type,
         "unit": meter.unit,
@@ -146,41 +147,3 @@ def entity_values(meter: MeterConfig, state: State) -> dict[str, float]:
         raise ValueError(
             f"Entity {state.entity_id} state is not a number: {state.state!r}"
         ) from err
-
-
-def endpoint_values(meter: MeterConfig, payload: dict[str, Any]) -> dict[str, float]:
-    """Извлечь показания из JSON, присланного на endpoint."""
-    if meter.meter_type == METER_TYPE_ELECTRICITY:
-        values = {}
-        for tariff in (TARIFF_DAY, TARIFF_NIGHT):
-            if tariff not in meter.tariffs:
-                continue
-            for key in (f"{tariff}_kwh", f"t{'1' if tariff == TARIFF_DAY else '2'}"):
-                if key in payload and payload[key] is not None:
-                    values[tariff] = float(payload[key])
-                    break
-        if not values:
-            raise ValueError(
-                "Electricity reading requires 'day_kwh'/'night_kwh' "
-                "(or 't1'/'t2') for configured tariffs"
-            )
-        return values
-
-    if READING_VALUE not in payload or payload[READING_VALUE] is None:
-        raise ValueError("Reading requires numeric 'value'")
-    try:
-        return {READING_VALUE: float(payload[READING_VALUE])}
-    except (TypeError, ValueError) as err:
-        raise ValueError(f"'value' is not a number: {payload[READING_VALUE]!r}") from err
-
-
-def parse_measured_at(raw: Any) -> datetime | None:
-    """Разобрать строку ISO-времени из payload (Z-сuffix поддерживается)."""
-    if not raw:
-        return None
-    if isinstance(raw, datetime):
-        return raw
-    try:
-        return datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-    except ValueError as err:
-        raise ValueError(f"Invalid 'measured_at': {raw!r}") from err

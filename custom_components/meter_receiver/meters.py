@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import voluptuous as vol
 
@@ -8,16 +8,15 @@ import homeassistant.helpers.config_validation as cv
 
 from .const import (
     CONF_ACCOUNT,
+    CONF_CODE,
     CONF_ENTITY_ID,
-    CONF_METER_ID,
+    CONF_METER_NUMBER,
     CONF_NAME,
     CONF_TARIFFS,
     CONF_TYPE,
     ELECTRICITY_TARIFFS,
     METER_TYPE_ELECTRICITY,
     METER_TYPES,
-    SOURCE_ENDPOINT,
-    SOURCE_ENTITY,
 )
 
 
@@ -25,9 +24,10 @@ from .const import (
 class MeterConfig:
     """Настройки одного счётчика из YAML-конфигурации."""
 
-    source_type: str  # entity | endpoint
-    source_id: str  # entity_id либо meter_id
+    entity_id: str
     account: str
+    code: str  # код лицевого счёта из ЛК (верификацию выполняет ЛК при заборе)
+    meter_number: str  # номер счётчика (как в ЛК)
     name: str
     meter_type: str
     tariffs: tuple = ()
@@ -35,17 +35,7 @@ class MeterConfig:
 
     @property
     def source(self) -> str:
-        return f"{self.source_type}:{self.source_id}"
-
-
-def _meter_has_source(config: dict) -> dict:
-    has_entity = bool(config.get(CONF_ENTITY_ID))
-    has_meter = bool(config.get(CONF_METER_ID))
-    if has_entity == has_meter:
-        raise vol.Invalid(
-            "Meter entry must have exactly one of 'entity_id' or 'meter_id'"
-        )
-    return config
+        return f"entity:{self.entity_id}"
 
 
 def _meter_tariffs(config: dict) -> dict:
@@ -62,9 +52,10 @@ def _meter_tariffs(config: dict) -> dict:
 METER_SCHEMA = vol.All(
     vol.Schema(
         {
-            vol.Optional(CONF_ENTITY_ID): cv.entity_id,
-            vol.Optional(CONF_METER_ID): cv.string,
+            vol.Required(CONF_ENTITY_ID): cv.entity_id,
             vol.Required(CONF_ACCOUNT): cv.string,
+            vol.Required(CONF_CODE): cv.string,
+            vol.Required(CONF_METER_NUMBER): cv.string,
             vol.Required(CONF_NAME): cv.string,
             vol.Required(CONF_TYPE): vol.In(METER_TYPES),
             vol.Optional(CONF_TARIFFS): vol.All(
@@ -72,6 +63,5 @@ METER_SCHEMA = vol.All(
             ),
         }
     ),
-    _meter_has_source,
     _meter_tariffs,
 )

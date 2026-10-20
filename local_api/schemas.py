@@ -16,10 +16,15 @@ METER_TYPE_UNITS = {
 
 
 class ReadingPayload(BaseModel):
-    """Входящее показание от Home Assistant (forward) или внешнего отправителя."""
+    """Входящее показание от Home Assistant (forward).
+
+    code — код лицевого счёта из ЛК; верификацию пары (счётчик, код)
+    выполняет ЛК при заборе данных, API пока только принимает и хранит.
+    """
 
     account: str = Field(min_length=1)
-    meter_id: str = Field(min_length=1)
+    code: str = Field(min_length=1)
+    meter_number: str = Field(min_length=1)
     meter_name: str = ""
     meter_type: MeterType
     unit: Optional[str] = None

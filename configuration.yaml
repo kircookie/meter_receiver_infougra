@@ -5,18 +5,21 @@ meter_receiver:
   forward_url: "http://192.168.1.50:5001/api/v1/readings"
   forward_api_key: "replace-with-the-same-api-key-from-local-api-env"
   meters:
-    # Источник — entity HA (показание берётся из состояния сенсора)
-    - entity_id: sensor.hvs_counter
-      account: "1234567890"
+    # entity_id — сенсор HA с показаниями (например, интеграция Элехант)
+    - entity_id: sensor.svd_15_126439_water
+      account: "1234567890"        # лицевой счёт
+      code: "код-из-личного-кабинета"  # код ЛС для верификации (проверяет ЛК)
+      meter_number: "126439"       # номер счётчика (как в ЛК)
       name: "ХВС"
-      meter_type: cold_water
+      meter_type: cold_water       # cold_water | hot_water | electricity | gas | heat
 
-    # Источник — meter_id, присылаемый на endpoint /api/meter_receiver/readings
-    - meter_id: electricity_001
+    - entity_id: sensor.electricity_meter
       account: "1234567890"
+      code: "код-из-личного-кабинета"
+      meter_number: "7701234567"
       name: "Электроснабжение"
       meter_type: electricity
-      tariffs: [day, night]   # день/ночь; по умолчанию оба
+      tariffs: [day, night]        # день/ночь; по умолчанию оба
 
 # Template-сенсоры, обновляемые событием meter_receiver_reading_received.
 # Если ключ template: уже есть в configuration.yaml — добавьте только элемент списка.
@@ -32,7 +35,7 @@ template:
         device_class: energy
         state_class: total_increasing
         attributes:
-          meter_id: "{{ trigger.event.data.meter_id }}"
+          meter_number: "{{ trigger.event.data.meter_number }}"
           source_name: "{{ trigger.event.data.meter_name }}"
 
       - name: "Электросчётчик — ночь"
@@ -42,7 +45,7 @@ template:
         device_class: energy
         state_class: total_increasing
         attributes:
-          meter_id: "{{ trigger.event.data.meter_id }}"
+          meter_number: "{{ trigger.event.data.meter_number }}"
           source_name: "{{ trigger.event.data.meter_name }}"
 
       - name: "Счётчик ХВС"
@@ -52,5 +55,5 @@ template:
         device_class: water
         state_class: total_increasing
         attributes:
-          meter_id: "{{ trigger.event.data.meter_id }}"
+          meter_number: "{{ trigger.event.data.meter_number }}"
           source_name: "{{ trigger.event.data.meter_name }}"

@@ -103,7 +103,8 @@ def create_app(db_path: str | Path, api_key: str) -> Flask:
             result, status = storage.store_reading(
                 _get_db(),
                 account=reading.account,
-                meter_id=reading.meter_id,
+                code=reading.code,
+                meter_number=reading.meter_number,
                 meter_name=reading.meter_name,
                 meter_type=reading.meter_type,
                 tariff=tariff,
@@ -129,7 +130,7 @@ def create_app(db_path: str | Path, api_key: str) -> Flask:
             jsonify(
                 {
                     "status": "accepted" if stored else "duplicate",
-                    "meter_id": reading.meter_id,
+                    "meter_number": reading.meter_number,
                     "received_at": received_at,
                     "stored": stored,
                     "results": results,
@@ -148,7 +149,7 @@ def create_app(db_path: str | Path, api_key: str) -> Flask:
         rows = storage.query_readings(
             _get_db(),
             account=request.args.get("account"),
-            meter_id=request.args.get("meter_id"),
+            meter_number=request.args.get("meter_number"),
             meter_type=request.args.get("meter_type"),
             tariff=request.args.get("tariff"),
         )
